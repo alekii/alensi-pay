@@ -32,6 +32,7 @@ public class MpesaPaymentProvider implements PaymentProvider {
         return switch (providerStatus.toUpperCase(Locale.ROOT)) {
             case "SUCCESS", "COMPLETED" -> PaymentStatus.COMPLETED;
             case "FAILED" -> PaymentStatus.FAILED;
+            case "REFUND_FAILED" -> PaymentStatus.REFUND_FAILED;
             case "REFUNDED" -> PaymentStatus.REFUNDED;
             default -> PaymentStatus.PENDING;
         };

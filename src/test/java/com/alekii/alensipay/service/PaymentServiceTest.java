@@ -26,7 +26,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.server.ResponseStatusException;
@@ -159,6 +158,7 @@ class PaymentServiceTest {
                 .build();
         when(paymentRepository.findByProviderReference("MPESA-pay-1")).thenReturn(Optional.of(payment));
         when(paymentProviderRegistry.getProvider("mpesa")).thenReturn(paymentProvider);
+        when(paymentProvider.supports("MPESA")).thenReturn(true);
         when(paymentProvider.mapStatus("COMPLETED")).thenReturn(PaymentStatus.COMPLETED);
 
         var response = paymentService.handleWebhook("mpesa", new WebhookRequest("MPESA-pay-1", "COMPLETED", null));
@@ -184,5 +184,29 @@ class PaymentServiceTest {
 
         assertThrows(ResponseStatusException.class,
                 () -> paymentService.refundPayment("pay-1", new RefundRequest("customer request")));
+    }
+
+    @Test
+    void completedPaymentRefundTransitionsToRefundPendingAndPublishesMessage() {
+        Payment payment = Payment.builder()
+                .id(UUID.randomUUID())
+                .reference("pay-1")
+                .provider("MPESA")
+                .providerReference("MPESA-pay-1")
+                .phoneNumber("254712345678")
+                .amount(BigDecimal.valueOf(100))
+                .currency("KES")
+                .status(PaymentStatus.COMPLETED)
+                .retryCount(0)
+                .completedAt(OffsetDateTime.now())
+                .build();
+        when(paymentRepository.findByReference("pay-1")).thenReturn(Optional.of(payment));
+
+        var response = paymentService.refundPayment("pay-1", new RefundRequest("customer request"));
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.REFUND_PENDING);
+        verify(paymentRepository).save(payment);
+        verify(auditService).record("pay-1", "REFUND_REQUESTED", "customer request");
+        verify(paymentMessagePublisher).publish(new PaymentMessage("pay-1", PaymentAction.REFUND, 0));
     }
 }

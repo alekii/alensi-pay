@@ -77,6 +77,9 @@ public class PaymentService implements PaymentMessageHandler {
         Payment payment = paymentRepository.findByProviderReference(request.providerReference())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Payment not found"));
         PaymentProvider paymentProvider = paymentProviderRegistry.getProvider(provider);
+        if (!paymentProvider.supports(payment.getProvider())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Webhook provider does not match payment");
+        }
         payment.setStatus(paymentProvider.mapStatus(request.status()));
         payment.setFailureReason(request.failureReason());
         if (payment.getStatus() == PaymentStatus.COMPLETED) {
@@ -145,7 +148,9 @@ public class PaymentService implements PaymentMessageHandler {
             payment.setStatus(providerResult.status());
             payment.setProviderReference(providerResult.providerReference());
             payment.setFailureReason(null);
-            payment.setRefundedAt(OffsetDateTime.now());
+            if (providerResult.status() == PaymentStatus.REFUNDED) {
+                payment.setRefundedAt(OffsetDateTime.now());
+            }
             paymentRepository.save(payment);
             auditService.record(payment.getReference(), "PAYMENT_REFUNDED", providerResult.providerReference());
             paymentCallbackDispatcher.dispatch(payment);
@@ -164,7 +169,7 @@ public class PaymentService implements PaymentMessageHandler {
             paymentMessagePublisher.publish(new PaymentMessage(payment.getReference(), action, nextAttempt));
             return;
         }
-        payment.setStatus(PaymentStatus.FAILED);
+        payment.setStatus(action == PaymentAction.REFUND ? PaymentStatus.REFUND_FAILED : PaymentStatus.FAILED);
         paymentRepository.save(payment);
         auditService.record(payment.getReference(), "PAYMENT_FAILED", reason);
         paymentCallbackDispatcher.dispatch(payment);
