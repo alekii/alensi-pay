@@ -10,4 +10,6 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByReference(String reference);
 
     Optional<Payment> findByProviderReference(String providerReference);
+
+    Optional<Payment> findByIdempotencyKey(String idempotencyKey);
 }

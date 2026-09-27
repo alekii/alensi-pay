@@ -54,9 +54,12 @@ public class Payment {
     @Column(unique = true)
     private String providerReference;
 
+    @Column(unique = true)
     private String idempotencyKey;
 
     private String refundReason;
+
+    private String refundProviderReference;
 
     @Column(nullable = false)
     private int retryCount;

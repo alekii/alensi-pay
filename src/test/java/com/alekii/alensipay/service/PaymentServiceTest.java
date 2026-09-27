@@ -117,6 +117,31 @@ class PaymentServiceTest {
     }
 
     @Test
+    void persistedIdempotencyKeyPreventsDuplicatePaymentWhenCacheMisses() {
+        Payment payment = Payment.builder()
+                .id(UUID.randomUUID())
+                .reference("pay-123")
+                .provider("MPESA")
+                .phoneNumber("254712345678")
+                .amount(BigDecimal.valueOf(100))
+                .currency("KES")
+                .status(PaymentStatus.PENDING)
+                .idempotencyKey("idem-1")
+                .retryCount(0)
+                .build();
+        when(idempotencyStore.find("idem-1")).thenReturn(Optional.empty());
+        when(paymentRepository.findByIdempotencyKey("idem-1")).thenReturn(Optional.of(payment));
+
+        var response = paymentService.initiatePayment("idem-1", new CreatePaymentRequest(
+                "mpesa", "254712345678", BigDecimal.valueOf(100), "KES", null
+        ));
+
+        assertThat(response.reference()).isEqualTo("pay-123");
+        verify(paymentRepository, never()).save(any(Payment.class));
+        verify(paymentMessagePublisher, never()).publish(any());
+    }
+
+    @Test
     void processingFailureRetriesAndEventuallyMarksPaymentFailed() {
         Payment payment = Payment.builder()
                 .id(UUID.randomUUID())
@@ -214,6 +239,30 @@ class PaymentServiceTest {
 
         assertThat(response.completedAt()).isEqualTo(completedAt);
         verify(paymentCallbackDispatcher, never()).dispatch(payment);
+    }
+
+    @Test
+    void terminalWebhookRejectsConflictingStatusTransition() {
+        Payment payment = Payment.builder()
+                .id(UUID.randomUUID())
+                .reference("pay-1")
+                .provider("MPESA")
+                .providerReference("MPESA-pay-1")
+                .phoneNumber("254712345678")
+                .amount(BigDecimal.valueOf(100))
+                .currency("KES")
+                .status(PaymentStatus.COMPLETED)
+                .retryCount(0)
+                .completedAt(OffsetDateTime.now().minusMinutes(5))
+                .build();
+        when(paymentRepository.findByProviderReference("MPESA-pay-1")).thenReturn(Optional.of(payment));
+        when(paymentProviderRegistry.getProvider("mpesa")).thenReturn(paymentProvider);
+        when(paymentProvider.supports("MPESA")).thenReturn(true);
+        when(paymentProvider.mapStatus("FAILED")).thenReturn(PaymentStatus.FAILED);
+
+        assertThrows(ResponseStatusException.class,
+                () -> paymentService.handleWebhook("mpesa", new WebhookRequest("MPESA-pay-1", "FAILED", "declined")));
+        verify(paymentCallbackDispatcher, never()).dispatch(any());
     }
 
     @Test

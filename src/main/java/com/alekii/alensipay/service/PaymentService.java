@@ -53,6 +53,7 @@ public class PaymentService implements PaymentMessageHandler {
     public PaymentResponse initiatePayment(String idempotencyKey, CreatePaymentRequest request) {
         return idempotencyStore.find(idempotencyKey)
                 .flatMap(paymentRepository::findByReference)
+                .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey))
                 .map(PaymentResponse::from)
                 .orElseGet(() -> createNewPayment(idempotencyKey, request));
     }
@@ -83,6 +84,9 @@ public class PaymentService implements PaymentMessageHandler {
         }
         PaymentStatus previousStatus = payment.getStatus();
         PaymentStatus updatedStatus = paymentProvider.mapStatus(request.status());
+        if (isTerminalStatus(previousStatus) && previousStatus != updatedStatus) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Terminal payments cannot transition to a new status");
+        }
         payment.setStatus(updatedStatus);
         payment.setFailureReason(request.failureReason());
         if (updatedStatus == PaymentStatus.COMPLETED && previousStatus != PaymentStatus.COMPLETED) {
@@ -147,7 +151,7 @@ public class PaymentService implements PaymentMessageHandler {
         try {
             ProviderResult providerResult = paymentProvider.refund(payment, payment.getRefundReason());
             payment.setStatus(providerResult.status());
-            payment.setProviderReference(providerResult.providerReference());
+            payment.setRefundProviderReference(providerResult.providerReference());
             payment.setFailureReason(null);
             if (providerResult.status() == PaymentStatus.REFUNDED) {
                 payment.setRefundedAt(OffsetDateTime.now());
