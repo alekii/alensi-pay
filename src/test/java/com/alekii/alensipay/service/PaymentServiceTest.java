@@ -169,6 +169,54 @@ class PaymentServiceTest {
     }
 
     @Test
+    void webhookRejectsProviderMismatch() {
+        Payment payment = Payment.builder()
+                .id(UUID.randomUUID())
+                .reference("pay-1")
+                .provider("AIRTEL")
+                .providerReference("MPESA-pay-1")
+                .phoneNumber("254712345678")
+                .amount(BigDecimal.valueOf(100))
+                .currency("KES")
+                .status(PaymentStatus.PENDING)
+                .retryCount(0)
+                .build();
+        when(paymentRepository.findByProviderReference("MPESA-pay-1")).thenReturn(Optional.of(payment));
+        when(paymentProviderRegistry.getProvider("mpesa")).thenReturn(paymentProvider);
+        when(paymentProvider.supports("AIRTEL")).thenReturn(false);
+
+        assertThrows(ResponseStatusException.class,
+                () -> paymentService.handleWebhook("mpesa", new WebhookRequest("MPESA-pay-1", "COMPLETED", null)));
+        verify(paymentCallbackDispatcher, never()).dispatch(any());
+    }
+
+    @Test
+    void duplicateTerminalWebhookDoesNotRewriteTimestampOrRedispatchCallback() {
+        OffsetDateTime completedAt = OffsetDateTime.now().minusMinutes(5);
+        Payment payment = Payment.builder()
+                .id(UUID.randomUUID())
+                .reference("pay-1")
+                .provider("MPESA")
+                .providerReference("MPESA-pay-1")
+                .phoneNumber("254712345678")
+                .amount(BigDecimal.valueOf(100))
+                .currency("KES")
+                .status(PaymentStatus.COMPLETED)
+                .retryCount(0)
+                .completedAt(completedAt)
+                .build();
+        when(paymentRepository.findByProviderReference("MPESA-pay-1")).thenReturn(Optional.of(payment));
+        when(paymentProviderRegistry.getProvider("mpesa")).thenReturn(paymentProvider);
+        when(paymentProvider.supports("MPESA")).thenReturn(true);
+        when(paymentProvider.mapStatus("COMPLETED")).thenReturn(PaymentStatus.COMPLETED);
+
+        var response = paymentService.handleWebhook("mpesa", new WebhookRequest("MPESA-pay-1", "COMPLETED", null));
+
+        assertThat(response.completedAt()).isEqualTo(completedAt);
+        verify(paymentCallbackDispatcher, never()).dispatch(payment);
+    }
+
+    @Test
     void refundRequiresCompletedPayment() {
         Payment payment = Payment.builder()
                 .id(UUID.randomUUID())

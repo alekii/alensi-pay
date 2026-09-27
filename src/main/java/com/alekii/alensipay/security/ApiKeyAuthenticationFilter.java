@@ -44,7 +44,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
         UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(
                 "api-client",
-                suppliedApiKey,
+                null,
                 List.of(new SimpleGrantedAuthority("ROLE_API_CLIENT"))
         );
         SecurityContextHolder.getContext().setAuthentication(authenticationToken);

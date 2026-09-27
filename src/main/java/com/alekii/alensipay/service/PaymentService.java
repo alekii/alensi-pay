@@ -67,6 +67,7 @@ public class PaymentService implements PaymentMessageHandler {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only completed payments can be refunded");
         }
         payment.setStatus(PaymentStatus.REFUND_PENDING);
+        payment.setRefundReason(request.reason());
         paymentRepository.save(payment);
         auditService.record(reference, "REFUND_REQUESTED", request.reason());
         paymentMessagePublisher.publish(new PaymentMessage(reference, PaymentAction.REFUND, 0));
@@ -80,19 +81,19 @@ public class PaymentService implements PaymentMessageHandler {
         if (!paymentProvider.supports(payment.getProvider())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Webhook provider does not match payment");
         }
-        payment.setStatus(paymentProvider.mapStatus(request.status()));
+        PaymentStatus previousStatus = payment.getStatus();
+        PaymentStatus updatedStatus = paymentProvider.mapStatus(request.status());
+        payment.setStatus(updatedStatus);
         payment.setFailureReason(request.failureReason());
-        if (payment.getStatus() == PaymentStatus.COMPLETED) {
+        if (updatedStatus == PaymentStatus.COMPLETED && previousStatus != PaymentStatus.COMPLETED) {
             payment.setCompletedAt(OffsetDateTime.now());
         }
-        if (payment.getStatus() == PaymentStatus.REFUNDED) {
+        if (updatedStatus == PaymentStatus.REFUNDED && previousStatus != PaymentStatus.REFUNDED) {
             payment.setRefundedAt(OffsetDateTime.now());
         }
         paymentRepository.save(payment);
         auditService.record(payment.getReference(), "WEBHOOK_RECEIVED", request.status());
-        if (payment.getStatus() == PaymentStatus.COMPLETED
-                || payment.getStatus() == PaymentStatus.FAILED
-                || payment.getStatus() == PaymentStatus.REFUNDED) {
+        if (isNewTerminalStatus(previousStatus, updatedStatus)) {
             paymentCallbackDispatcher.dispatch(payment);
         }
         return PaymentResponse.from(payment);
@@ -144,7 +145,7 @@ public class PaymentService implements PaymentMessageHandler {
     private void processRefund(Payment payment, int attempt) {
         PaymentProvider paymentProvider = paymentProviderRegistry.getProvider(payment.getProvider());
         try {
-            ProviderResult providerResult = paymentProvider.refund(payment, "Refund requested");
+            ProviderResult providerResult = paymentProvider.refund(payment, payment.getRefundReason());
             payment.setStatus(providerResult.status());
             payment.setProviderReference(providerResult.providerReference());
             payment.setFailureReason(null);
@@ -178,5 +179,16 @@ public class PaymentService implements PaymentMessageHandler {
     private Payment getPaymentEntity(String reference) {
         return paymentRepository.findByReference(reference)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Payment not found"));
+    }
+
+    private boolean isNewTerminalStatus(PaymentStatus previousStatus, PaymentStatus updatedStatus) {
+        return isTerminalStatus(updatedStatus) && previousStatus != updatedStatus;
+    }
+
+    private boolean isTerminalStatus(PaymentStatus paymentStatus) {
+        return paymentStatus == PaymentStatus.COMPLETED
+                || paymentStatus == PaymentStatus.FAILED
+                || paymentStatus == PaymentStatus.REFUNDED
+                || paymentStatus == PaymentStatus.REFUND_FAILED;
     }
 }

@@ -56,6 +56,8 @@ public class Payment {
 
     private String idempotencyKey;
 
+    private String refundReason;
+
     @Column(nullable = false)
     private int retryCount;
 
